@@ -1,9 +1,19 @@
+/*
+vnc-screencapture captures VNC screen and writes captured frames to GIF file.
+
+	vnc-screencapture -vnc localhost:5900 -out screen-capture.gif
+
+Usage
+
+	vnc-screencapture [flag]
+*/
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
+	"image/gif"
 	"log"
 	"net"
 	"os"
@@ -23,7 +33,7 @@ func main() {
 
 	conn, err := Connect(connStr)
 	if err != nil {
-		log.Fatal("Connection failed: %v", err)
+		log.Fatalf("Connection failed: %v", err)
 	}
 
 	done := make(chan any)
@@ -36,16 +46,26 @@ func main() {
 	}()
 
 	fmt.Println("Capturing VNC (Press Ctrl+C to end).")
-	gifBytes, err := screencapture.RecordGIF(context.Background(), conn, done)
+	gifData, err := screencapture.RecordGIF(context.Background(), conn, done)
 	if err != nil {
-		log.Fatal("GIF recording failure: %v", err)
+		log.Fatalf("GIF recording failure: %v", err)
+	}
+	fmt.Printf("Writing to %v... ", out)
+
+	f, err := os.Create(out)
+	if err != nil {
+		log.Fatalf("Failed create GIF file: %v", err)
 	}
 
-	fmt.Printf("Writing to %v... ", out)
-	err = os.WriteFile(out, gifBytes, 0644)
+	err = gif.EncodeAll(f, gifData)
 	if err != nil {
-		log.Fatal("Failed to write GIF: %v", err)
+		log.Fatalf("Failed to write GIF: %v", err)
 	}
+
+	if err := f.Close(); err != nil {
+		log.Fatal(err)
+	}
+
 	fmt.Printf("Done!\n")
 }
 

@@ -1,9 +1,7 @@
 package screencapture
 
 import (
-	"bytes"
 	"context"
-	"image/gif"
 	"log"
 	"net"
 	"testing"
@@ -74,11 +72,7 @@ func TestStartCapture_success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	res, err := RecordGIF(ctx, clientConn, doneCh)
-	checkErr(err)
-
-	buf := bytes.NewBuffer(res)
-	gif, err := gif.DecodeAll(buf)
+	gif, err := RecordGIF(ctx, clientConn, doneCh)
 	checkErr(err)
 
 	assert.Equal(t, 3, len(gif.Image))
