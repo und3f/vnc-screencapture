@@ -18,23 +18,23 @@ vnc-screencapture -vnc localhost:5900
 Example of API usage for capturing few seconds from VNC connection:
 
 ```go
-	conn, _ := net.Dial("tcp", "localhost:5900")
+conn, _ := net.Dial("tcp", "localhost:5900")
 
-	recorder, _ := screencapture.Connect(context.Background(), conn)
+recorder, _ := screencapture.Connect(context.Background(), conn)
 
-	defer recorder.Close()
+defer recorder.Close()
 
-	doneCh := make(chan any)
-	go func() {
-		time.Sleep(2 * time.Second)
-		doneCh <- struct{}{}
-	}()
+doneCh := make(chan any)
+go func() {
+    time.Sleep(2 * time.Second)
+    doneCh <- struct{}{}
+}()
 
-	recorder.Record(doneCh)
+recorder.Record(doneCh)
 
-	f, _ := os.Create("out.gif")
-	defer f.Close()
+f, _ := os.Create("out.gif")
+defer f.Close()
 
-	gifData, _ := recorder.RenderGIF()
-	gif.EncodeAll(f, gifData)
+gifData, _ := recorder.RenderGIF()
+gif.EncodeAll(f, gifData)
 ```
