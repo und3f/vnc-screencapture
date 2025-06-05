@@ -53,7 +53,9 @@ func TestStartCapture_success(t *testing.T) {
 
 	doneCh := make(chan any, 1)
 	go func() {
-		defer serverListener.Close()
+		defer func() {
+			checkErr(serverListener.Close())
+		}()
 
 		err = RunVNCMockServer(serverListener)
 		if err != nil {
@@ -65,7 +67,9 @@ func TestStartCapture_success(t *testing.T) {
 
 	clientConn, err := net.DialTimeout("tcp", serverListener.Addr().String(), timeout)
 	checkErr(err)
-	defer clientConn.Close()
+	defer func() {
+		checkErr(clientConn.Close())
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -118,36 +122,37 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 				if cfg.ErrorCh != nil {
 					cfg.ErrorCh <- err
 				}
-				conn.Close()
+				if err = conn.Close(); err != nil {
+					log.Fatal(err)
+				}
 				return
 			}
 		}
 	}()
 
 	done := false
-	for !done {
-		select {
-		case msg := <-chServer:
-			switch msg.Type() {
-			case vnc.FramebufferUpdateRequestMsgType:
-				frame := frames[frameInd]
-				time.Sleep(delay)
-				cfg.ServerMessageCh <- &vnc.FramebufferUpdate{
-					NumRect: uint16(len(frame)),
-					Rects:   frame}
+	for msg := range chServer {
+		if done {
+			break
+		}
+		switch msg.Type() {
+		case vnc.FramebufferUpdateRequestMsgType:
+			frame := frames[frameInd]
+			cfg.ServerMessageCh <- &vnc.FramebufferUpdate{
+				NumRect: uint16(len(frame)),
+				Rects:   frame}
+			time.Sleep(delay)
 
-				frameInd++
-				if frameInd >= len(frames) {
-					done = true
-					break
-				}
+			frameInd++
+			if frameInd >= len(frames) {
+				done = true
 			}
 		}
 	}
 
-	// Ensure messages are sent
-	time.Sleep(delay)
-	conn.Close()
+	if err = conn.Close(); err != nil {
+		log.Fatal(err)
+	}
 
 	return nil
 }

@@ -8,6 +8,8 @@
 *.so
 *.dylib
 
+/vnc-record.gif
+
 # Test binary, built with `go test -c`
 *.test
 
