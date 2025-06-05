@@ -65,9 +65,6 @@ func TestStartCapture_success(t *testing.T) {
 
 	clientConn, err := net.DialTimeout("tcp", serverListener.Addr().String(), timeout)
 	checkErr(err)
-	defer func() {
-		checkErr(clientConn.Close())
-	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -82,8 +79,8 @@ func TestStartCapture_success(t *testing.T) {
 }
 
 func RunVNCMockServer(ln *net.TCPListener) error {
-	chServer := make(chan vnc.ClientMessage)
-	chClient := make(chan vnc.ServerMessage)
+	receiveCh := make(chan vnc.ClientMessage, 1)
+	sendCh := make(chan vnc.ServerMessage, 1)
 
 	frameInd := 0
 
@@ -94,8 +91,8 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 		SecurityHandlers: []vnc.SecurityHandler{&vnc.ClientAuthNone{}},
 		Encodings:        []vnc.Encoding{&vnc.RawEncoding{}},
 		PixelFormat:      vnc.PixelFormat32bit,
-		ClientMessageCh:  chServer,
-		ServerMessageCh:  chClient,
+		ClientMessageCh:  receiveCh,
+		ServerMessageCh:  sendCh,
 		Messages:         vnc.DefaultClientMessages,
 	}
 
@@ -106,7 +103,6 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 
 	conn, err := vnc.NewServerConn(c, cfg)
 	if err != nil {
-		cfg.ErrorCh <- err
 		log.Fatal(err)
 	}
 
@@ -125,21 +121,24 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 	}()
 
 	done := false
-	for msg := range chServer {
-		if done {
-			break
-		}
-		switch msg.Type() {
-		case vnc.FramebufferUpdateRequestMsgType:
-			frame := frames[frameInd]
-			cfg.ServerMessageCh <- &vnc.FramebufferUpdate{
-				NumRect: uint16(len(frame)),
-				Rects:   frame}
-			time.Sleep(delay)
+	for !done {
+		select {
+		case err := <-cfg.ErrorCh:
+			done = true
+			log.Fatalf("Server error: %v", err)
+		case msg := <-receiveCh:
+			switch msg.Type() {
+			case vnc.FramebufferUpdateRequestMsgType:
+				frame := frames[frameInd]
+				cfg.ServerMessageCh <- &vnc.FramebufferUpdate{
+					NumRect: uint16(len(frame)),
+					Rects:   frame}
+				time.Sleep(delay)
 
-			frameInd++
-			if frameInd >= len(frames) {
-				done = true
+				frameInd++
+				if frameInd >= len(frames) {
+					done = true
+				}
 			}
 		}
 	}
