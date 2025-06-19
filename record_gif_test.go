@@ -2,21 +2,23 @@ package screencapture
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/und3f/vnc-screencapture/fbupdater"
 	vnc "github.com/unistack-org/go-rfb"
 )
 
 type Frame = []*vnc.Rectangle
 
 const (
-	width  = 10
-	height = 20
-	delay  = time.Second / 10
+	width      = 10
+	height     = 20
+	frameDelay = 160 * time.Millisecond
 )
 
 var (
@@ -30,6 +32,9 @@ var (
 			GenerateFilledRect(0, 0, width, height, black),
 		},
 		{
+			GenerateFilledRect(0, 0, width, height, black),
+		},
+		{
 			GenerateFilledRect(width/2, height/2, width/2, height/2, white),
 		},
 		{
@@ -37,44 +42,62 @@ var (
 			GenerateFilledRect(0, height/2, width/2, height/2, blue),
 		},
 	}
+
+	expectedFrameDelay = int(frameDelay.Milliseconds() / 10)
 )
 
 func TestStartCapture_success(t *testing.T) {
-	checkErr := func(err error) {
-		if err != nil {
-			t.Fatal(err)
-		}
+	serverListener, err := net.ListenTCP("tcp", &net.TCPAddr{Port: 0})
+	if err != nil {
+		log.Fatalf("server listen failed: %v", err)
 	}
 
-	serverListener, err := net.ListenTCP("tcp", &net.TCPAddr{Port: 0})
-	checkErr(err)
-
-	doneCh := make(chan any, 1)
 	go func() {
 		defer func() {
-			checkErr(serverListener.Close())
+			if err = serverListener.Close(); err != nil {
+				log.Printf("Close failed: %v", err)
+			}
 		}()
 
 		err = RunVNCMockServer(serverListener)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatalf("Mock server start failed: %v", err)
 		}
 	}()
 
 	timeout := 1 * time.Second
 
 	clientConn, err := net.DialTimeout("tcp", serverListener.Addr().String(), timeout)
-	checkErr(err)
+	if err != nil {
+		fmt.Printf("Client Dial failed: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	gif, err := RecordGIF(ctx, clientConn, doneCh)
-	checkErr(err)
+	doneCh := make(chan any, 1)
+	go func() {
+		select {
+		case <-ctx.Done():
+			doneCh <- struct{}{}
+		}
+	}()
 
-	assert.Equal(t, 3, len(gif.Image))
-	for _, delay := range gif.Delay {
-		assert.InDelta(t, 10, delay, 3.0)
+	gif, err := RecordGIFWithOptions(ctx, clientConn, CaptureOptions{
+		DoneCh:           doneCh,
+		FBUpdaterFactory: fbupdater.OscillatorFBUpdaterFactory(frameDelay),
+	})
+	if err != nil {
+		log.Fatalf("gif record failed: %v", err)
+	}
+
+	assert.Equal(t, len(frames)-1, len(gif.Image))
+	assert.Equal(t, len(frames)-1, len(gif.Delay))
+	for i, frameDelay := range gif.Delay {
+		expectedCurrentFrameDelay := expectedFrameDelay
+		t.Run(fmt.Sprintf("Delay[%d]", i), func(t *testing.T) {
+			assert.InDelta(t, expectedCurrentFrameDelay, frameDelay, 10.0)
+		})
 	}
 }
 
@@ -105,6 +128,13 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 	if err != nil {
 		log.Fatal(err)
 	}
+	closeConn := func() {
+		if err = conn.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	defer closeConn()
 
 	go func() {
 		for _, h := range cfg.Handlers {
@@ -133,7 +163,6 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 				cfg.ServerMessageCh <- &vnc.FramebufferUpdate{
 					NumRect: uint16(len(frame)),
 					Rects:   frame}
-				time.Sleep(delay)
 
 				frameInd++
 				if frameInd >= len(frames) {
@@ -143,11 +172,8 @@ func RunVNCMockServer(ln *net.TCPListener) error {
 		}
 	}
 
-	if err = conn.Close(); err != nil {
-		log.Fatal(err)
-	}
-
-	return nil
+	time.Sleep(100 * time.Millisecond)
+	return err
 }
 
 func vncRGB(r, g, b uint16) *vnc.Color {

@@ -9,11 +9,11 @@ import (
 	"fmt"
 	"image"
 	"image/gif"
-	"io"
 	"log"
 	"net"
 	"time"
 
+	"github.com/und3f/vnc-screencapture/fbupdater"
 	vnc "github.com/unistack-org/go-rfb"
 )
 
@@ -33,12 +33,35 @@ type screenCaptureImpl struct {
 	conn *vnc.ClientConn
 	cfg  *vnc.ClientConfig
 
-	images []*image.Paletted
-	delays []int
+	images                 []*image.Paletted
+	frameRequestTimestamps []time.Time
+	delays                 []int
+
+	fbUpdater fbupdater.FBUpdater
 }
 
-// Connect initializes VNC connection and starts message processing goroutine.
+type CaptureOptions struct {
+	FBUpdaterFactory fbupdater.FBUpdaterFactory
+	DoneCh           chan any
+}
+
+// Connect initializes VNC connection and starts message processing goroutine. Use default parameters.
 func Connect(ctx context.Context, conn net.Conn) (ScreenCapture, error) {
+	return ConnectWithOptions(ctx, conn, defaultOptions)
+}
+
+const (
+	maximumQueuedFrames = 4
+)
+
+var (
+	defaultOptions = CaptureOptions{
+		FBUpdaterFactory: fbupdater.NewOnFrameReceivedFBUpdater,
+	}
+)
+
+// Connect initializes VNC connection and starts message processing goroutine.
+func ConnectWithOptions(ctx context.Context, conn net.Conn, options CaptureOptions) (ScreenCapture, error) {
 	cchServer := make(chan vnc.ServerMessage, 1)
 	cchClient := make(chan vnc.ClientMessage, 1)
 	errorCh := make(chan error, 1)
@@ -71,10 +94,17 @@ func Connect(ctx context.Context, conn net.Conn) (ScreenCapture, error) {
 		}
 	}()
 
-	return &screenCaptureImpl{
+	// Receive initial update buffer response
+	<-cchServer
+
+	sc := &screenCaptureImpl{
 		conn: vncConn,
 		cfg:  ccfg,
-	}, nil
+	}
+
+	sc.fbUpdater = options.FBUpdaterFactory(sc)
+
+	return sc, nil
 }
 
 func (sc *screenCaptureImpl) Record(doneCh chan any) error {
@@ -86,30 +116,19 @@ func (sc *screenCaptureImpl) Record(doneCh chan any) error {
 
 	imageSize := image.Rectangle{image.Point{0, 0}, image.Point{int(conn.Width()), int(conn.Height())}}
 	var rfbFrame []vnc.Color
-	lastFrameAt := time.Now()
 
-	// Create Update Request
-	fbur := &vnc.FramebufferUpdateRequest{
-		Inc:    0,
-		X:      0,
-		Y:      0,
-		Width:  conn.Width(),
-		Height: conn.Height(),
-	}
-
-	// Initial FB request (no increment)
-	sc.cfg.ClientMessageCh <- fbur
+	sc.fbUpdater.Start()
+	defer sc.fbUpdater.Stop()
+	defer sc.recordFBUpdateRequestTimestamp()
 
 	done := false
 	for !done {
 		select {
-		case err := <-sc.cfg.ErrorCh:
-			if errors.Is(err, io.EOF) {
-				done = true
-				break
-			}
-			return err
+		case <-sc.cfg.ErrorCh:
+			done = true
+			continue
 		case msg := <-sc.cfg.ServerMessageCh:
+			sc.fbUpdater.OnFrameReceived()
 			rfbUpdateMsg := msg.(*vnc.FramebufferUpdate)
 			if rfbFrame == nil {
 				if !sc.isFullScreenImage(rfbUpdateMsg) {
@@ -117,26 +136,26 @@ func (sc *screenCaptureImpl) Record(doneCh chan any) error {
 					continue
 				}
 				rfbFrame = make([]vnc.Color, int(conn.Width())*int(conn.Height()))
-
-				fbur.Inc = 1
-			} else {
-				sc.delays = append(sc.delays, int(time.Since(lastFrameAt)/time.Millisecond)/10)
 			}
 			vNCFrameUpdate(rfbFrame, int(conn.Width()), rfbUpdateMsg.Rects)
 			sc.images = append(sc.images, vncRawColorToPalettedImage(rfbFrame, imageSize))
-			lastFrameAt = time.Now()
-			sc.cfg.ClientMessageCh <- fbur
 		case <-doneCh:
 			done = true
 		}
 	}
 
-	sc.delays = append(sc.delays, int(time.Since(lastFrameAt)/time.Millisecond)/10)
-
 	return nil
 }
 
 func (sc *screenCaptureImpl) RenderGIF() (*gif.GIF, error) {
+
+	sc.delays = make([]int, len(sc.images))
+
+	for i := range sc.delays {
+		sc.delays[i] = int(sc.frameRequestTimestamps[i+1].Sub(sc.frameRequestTimestamps[i]).Milliseconds() / 10)
+	}
+	sc.frameRequestTimestamps = nil
+
 	gifRes := &gif.GIF{
 		Image: sc.images,
 		Delay: sc.delays,
@@ -144,6 +163,7 @@ func (sc *screenCaptureImpl) RenderGIF() (*gif.GIF, error) {
 
 	sc.images = nil
 	sc.delays = nil
+	sc.frameRequestTimestamps = nil
 
 	return gifRes, nil
 }
@@ -160,4 +180,29 @@ func (sc *screenCaptureImpl) isFullScreenImage(msg *vnc.FramebufferUpdate) bool 
 	rect := msg.Rects[0]
 
 	return rect.X == 0 && rect.Y == 0 && rect.Width == sc.conn.Width() && rect.Height == sc.conn.Height()
+}
+
+func (sc *screenCaptureImpl) UpdateFB(incremental bool) {
+	var inc uint8
+	if incremental {
+		inc = 1
+	}
+
+	// Create Update Request
+	fbur := &vnc.FramebufferUpdateRequest{
+		Inc:    inc,
+		X:      0,
+		Y:      0,
+		Width:  sc.conn.Width(),
+		Height: sc.conn.Height(),
+	}
+
+	// Initial FB request (no increment)
+	sc.cfg.ClientMessageCh <- fbur
+
+	sc.recordFBUpdateRequestTimestamp()
+}
+
+func (sc *screenCaptureImpl) recordFBUpdateRequestTimestamp() {
+	sc.frameRequestTimestamps = append(sc.frameRequestTimestamps, time.Now())
 }

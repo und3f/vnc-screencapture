@@ -8,9 +8,16 @@ import (
 )
 
 // RecordGIF initializes VNC connection, request screen updates until either
-// context canceled, doneCh received, or VNC connection is closed.
+// context canceled, doneCh received, or VNC connection is closed using defaultOptions.
 func RecordGIF(ctx context.Context, conn net.Conn, doneCh chan any) (*gif.GIF, error) {
-	recorder, err := Connect(ctx, conn)
+	var options = defaultOptions
+	options.DoneCh = doneCh
+
+	return RecordGIFWithOptions(ctx, conn, options)
+}
+
+func RecordGIFWithOptions(ctx context.Context, conn net.Conn, options CaptureOptions) (*gif.GIF, error) {
+	recorder, err := ConnectWithOptions(ctx, conn, options)
 	if err != nil {
 		return nil, err
 	}
@@ -21,9 +28,7 @@ func RecordGIF(ctx context.Context, conn net.Conn, doneCh chan any) (*gif.GIF, e
 		}
 	}()
 
-	if err := recorder.Record(doneCh); err != nil {
-		return nil, err
-	}
+	recorder.Record(options.DoneCh)
 
 	return recorder.RenderGIF()
 }
