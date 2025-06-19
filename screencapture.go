@@ -84,9 +84,9 @@ func (sc *screenCaptureImpl) Record(doneCh chan any) error {
 
 	conn := sc.conn
 
-	imageSize := image.Rectangle{image.Point{0, 0}, image.Point{int(conn.Width()), int(conn.Height())}}
-	lastFrameAt := time.Now()
+	imageSize := image.Rectangle{image.Point{0, 0}, image.Point{int(conn.Width() - 1), int(conn.Height() - 1)}}
 	var rfbFrame []vnc.Color
+	lastFrameAt := time.Now()
 
 	// Create Update Request
 	fbur := &vnc.FramebufferUpdateRequest{
@@ -113,16 +113,16 @@ func (sc *screenCaptureImpl) Record(doneCh chan any) error {
 			rfbUpdateMsg := msg.(*vnc.FramebufferUpdate)
 			if rfbFrame == nil {
 				if !sc.isFullScreenImage(rfbUpdateMsg) {
-					// Skip partial screen update until we receive full
+					// Skip incremental screen updates until we receive full
 					continue
 				}
+				rfbFrame = make([]vnc.Color, conn.Width()*conn.Height())
 
-				rfbFrame = rfbUpdateMsg.Rects[0].Enc.(*vnc.RawEncoding).Colors
 				fbur.Inc = 1
 			} else {
-				vNCFrameUpdate(rfbFrame, int(conn.Width()), rfbUpdateMsg.Rects)
 				sc.delays = append(sc.delays, int(time.Since(lastFrameAt)/time.Millisecond)/10)
 			}
+			vNCFrameUpdate(rfbFrame, int(conn.Width()), rfbUpdateMsg.Rects)
 			sc.images = append(sc.images, vncRawColorToPalettedImage(rfbFrame, imageSize))
 			lastFrameAt = time.Now()
 			sc.cfg.ClientMessageCh <- fbur

@@ -14,8 +14,8 @@ import (
 func vncRawColorToPalettedImage(colors []vnc.Color, imageSize image.Rectangle) *image.Paletted {
 	palette := getVNCRawColorPalette(colors)
 	frame := image.NewPaletted(imageSize, palette)
-	for y := imageSize.Min.Y; y < imageSize.Max.Y; y++ {
-		for x := imageSize.Min.X; x < imageSize.Max.X; x++ {
+	for y := imageSize.Min.Y; y <= imageSize.Max.Y; y++ {
+		for x := imageSize.Min.X; x <= imageSize.Max.X; x++ {
 			i := y*imageSize.Max.X + x
 			frame.Set(x, y, vncRawColorToImageColor(colors[i]))
 		}
