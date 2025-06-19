@@ -84,7 +84,7 @@ func (sc *screenCaptureImpl) Record(doneCh chan any) error {
 
 	conn := sc.conn
 
-	imageSize := image.Rectangle{image.Point{0, 0}, image.Point{int(conn.Width() - 1), int(conn.Height() - 1)}}
+	imageSize := image.Rectangle{image.Point{0, 0}, image.Point{int(conn.Width()), int(conn.Height())}}
 	var rfbFrame []vnc.Color
 	lastFrameAt := time.Now()
 
@@ -116,7 +116,7 @@ func (sc *screenCaptureImpl) Record(doneCh chan any) error {
 					// Skip incremental screen updates until we receive full
 					continue
 				}
-				rfbFrame = make([]vnc.Color, conn.Width()*conn.Height())
+				rfbFrame = make([]vnc.Color, int(conn.Width())*int(conn.Height()))
 
 				fbur.Inc = 1
 			} else {
